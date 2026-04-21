@@ -204,7 +204,16 @@ async def handle_file(message: types.Message):
     save_excel(rows)
 
     await message.reply_document(FSInputFile("output.xlsx"))
+    try:
+        os.remove(path)
+    except:
+        pass
 
+    # 🔥 Excelni ham o‘chirish
+    try:
+        os.remove("output.xlsx")
+    except:
+        pass
 
 @dp.message()
 async def other(message: types.Message):
