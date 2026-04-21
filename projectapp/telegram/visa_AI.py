@@ -181,7 +181,7 @@ def save_excel(rows, filename="output.xlsx"):
 @dp.message(Command("start"))
 async def start(message: types.Message):
     await message.reply("PDF yubor — men uni PROFESSIONAL Excel qilaman 📊🔥")
-
+# bnnbvnvbnvbv
 
 @dp.message(F.document)
 async def handle_file(message: types.Message):
