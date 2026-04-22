@@ -6,7 +6,7 @@ from aiogram.filters import Command
 from aiogram.types import FSInputFile
 import asyncio
 import os
-
+# jhjhjh
 # 🔑 TOKEN (BU YERGA O'Z TOKENINGNI QO'Y)
 TOKEN = "8307217215:AAE65y0HoGbVcb5CUShi9D_Di1j3vaRBHd8"
 
