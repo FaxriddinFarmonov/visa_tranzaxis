@@ -136,6 +136,16 @@ async def handle_pdf(message: types.Message):
     save_to_excel(data)
 
     await message.answer_document(FSInputFile("report.xlsx"))
+    try:
+        os.remove(path)
+    except:
+        pass
+
+        # 🔥 Excelni ham o‘chirish
+    try:
+        os.remove("output.xlsx")
+    except:
+        pass
 
 
 # ❌ BOSHQA NARSA
