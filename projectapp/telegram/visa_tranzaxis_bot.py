@@ -1,25 +1,23 @@
-
-
-
 import re
 import pdfplumber
 from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import FSInputFile
 import asyncio
 import os
 
-TOKEN = "8556733636:AAG5uynF29fvJP1MR6E1ckJn9r5ZWyCMojE"
+# 🔑 TOKEN (BU YERGA O'Z TOKENINGNI QO'Y)
+TOKEN = "8307217215:AAE65y0HoGbVcb5CUShi9D_Di1j3vaRBHd8"
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# 📥 PDF
-def extract_text_from_pdf(path):
+
+# 📥 PDF → TEXT
+def extract_text_from_pdf(pdf_path):
     text = ""
-    with pdfplumber.open(path) as pdf:
+    with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
             t = page.extract_text()
             if t:
@@ -27,166 +25,98 @@ def extract_text_from_pdf(path):
     return text
 
 
-# 🔥 SMART SPLIT (yaxshilangan)
-def smart_split(line):
-    parts = re.split(r"\s{2,}", line.strip())
+# 📊 PARSER (VISA REPORT)
+def parse_settlement_report(text):
+    if "Settlement Currency Code:" not in text:
+        return None
 
-    if len(parts) == 1:
-        parts = line.split()
+    parsed_data = {}
 
-    return parts
+    currency_blocks = re.split(r"Settlement Currency Code:", text)
 
+    for block in currency_blocks[1:]:
+        currency_match = re.match(r"\s*(\w+)", block)
+        currency = currency_match.group(1) if currency_match else "UNKNOWN"
 
-# 🔥 SUPER PARSER
-def parse_rows(text):
-    lines = text.split("\n")
-    rows = []
+        parsed_data.setdefault(currency, [])
 
-    for line in lines:
-        line = line.strip()
-        if not line:
-            rows.append([])
-            continue
+        settl_blocks = re.split(r"Settl\. Date:", block)
 
-        # 🔹 Reporting (yonma-yon)
-        if "Reporting for:" in line and "Settlement Currency Code:" in line:
-            m = re.search(r"Reporting for:\s*(.*?)\s*Settlement Currency Code:\s*(\w+)", line)
-            if m:
-                rows.append(["Reporting for", m.group(1), "Currency", m.group(2)])
-                continue
+        for sb in settl_blocks[1:]:
+            date_match = re.match(r"\s*(\d{4}\.\d{2}\.\d{2})", sb)
+            date = date_match.group(1).replace(".", "/") if date_match else ""
 
-        # 🔹 Date line
-        if "Settl. Date:" in line and "Clearing Currency Code:" in line:
-            m = re.search(r"Settl\. Date:\s*(.*?)\s*Clearing Currency Code:\s*(\w+)", line)
-            if m:
-                rows.append(["Settl Date", m.group(1), "Clearing Currency", m.group(2)])
-                continue
+            count, interch, reimb = ("", "", "")
 
-        # 🔹 TABLE HEADER
-        if "Count" in line and "Interch." in line:
-            rows.append(["Type", "Count", "Interch. value", "Reimb. Fees", "Net value"])
-            continue
+            issuer_total = re.search(
+                r"Issuer Total\s+Count\s+Interch\. value\s+Reimb\. Fees\s+Net value",
+                sb
+            )
 
-        # 🔹 ISSUER HEADERS
-        if any(k in line for k in [
-            "Issuer other",
-            "Issuer originals",
-            "Issuer reversals",
-            "Issuer Total"
-        ]):
-            rows.append([line])
-            continue
+            if issuer_total:
+                lines = sb[issuer_total.end():].strip().splitlines()
+                if lines:
+                    nums = lines[0].split()
+                    if len(nums) >= 3:
+                        count = nums[0]
+                        interch = nums[1]
+                        reimb = nums[2]
 
-        # 🔹 OPTIONAL FEES HEADER
-        if "Optional Issuer conversion fees" in line:
-            rows.append(["Optional Fees", "Interch. amount", "Convers. Fee", "Opt. issuer fee"])
-            continue
+            visa_match = re.search(r"Total for VISA charges\s+([-\d.,]+)", sb)
+            visa = visa_match.group(1) if visa_match else "0"
 
-        # 🔹 VISA HEADER
-        if "Visa Charges (Issuer)" in line:
-            rows.append(["Visa Charges", "Amount"])
-            continue
+            net_match = re.search(r"Net Settlement Amount \(Issuer\)\s+([-\d.,]+)", sb)
+            net = net_match.group(1) if net_match else "0"
 
-        # 🔹 VISA ROW (fix split)
-        if "ISA CHARGE" in line:
-            value = line.split()[-1]
-            name = " ".join(line.split()[:-1])
-            rows.append([name, value])
-            continue
+            if date:
+                parsed_data[currency].append([
+                    date,
+                    count,
+                    float(interch.replace(",", ".")) if interch else 0,
+                    float(reimb.replace(",", ".")) if reimb else 0,
+                    float(visa.replace(",", ".")),
+                    float(net.replace(",", "."))
+                ])
 
-        # 🔹 TOTAL VISA
-        if "Total for VISA charges" in line:
-            rows.append(["Total VISA charges", line.split()[-1]])
-            continue
-
-        # 🔹 NET
-        if "Net Settlement Amount" in line:
-            rows.append(["Net Settlement", line.split()[-1]])
-            continue
-
-        # 🔹 OPTIONAL rows
-        if line.startswith("Originals") or line.startswith("Total"):
-            parts = smart_split(line)
-            rows.append(parts)
-            continue
-
-        # 🔹 TABLE ROWS
-        parts = smart_split(line)
-
-        if len(parts) >= 4:
-            name = " ".join(parts[:-4])
-            nums = parts[-4:]
-            rows.append([name] + nums)
-        else:
-            rows.append(parts)
-
-    return rows
+    return parsed_data
 
 
-# 🎨 EXCEL DESIGN
-def save_excel(rows, filename="output.xlsx"):
+# 📤 EXCEL
+def save_to_excel(data, filename="report.xlsx"):
     wb = Workbook()
     ws = wb.active
 
-    bold = Font(bold=True)
-    center = Alignment(horizontal="center")
+    headers = [
+        "Date", "Count", "Interch", "Reimb",
+        "Visa Charges", "Net Settlement", "Total"
+    ]
+    ws.append(headers)
 
-    border = Border(
-        left=Side(style="thin"),
-        right=Side(style="thin"),
-        top=Side(style="thin"),
-        bottom=Side(style="thin"),
-    )
+    for currency, rows in data.items():
+        ws.append([])
+        ws.append([f"CURRENCY: {currency}"])
 
-    fill_header = PatternFill(start_color="D9E1F2", fill_type="solid")
-
-    for r_idx, row in enumerate(rows, 1):
-        for c_idx, val in enumerate(row, 1):
-            cell = ws.cell(row=r_idx, column=c_idx, value=val)
-
-            # HEADER STYLE
-            if val in ["Type", "Count", "Interch. value", "Reimb. Fees", "Net value"]:
-                cell.font = bold
-                cell.alignment = center
-                cell.fill = fill_header
-                cell.border = border
-
-            # SECTION HEADER
-            elif isinstance(val, str) and "Issuer" in val:
-                cell.font = Font(bold=True, size=12)
-
-            # IMPORTANT VALUES
-            elif isinstance(val, str) and any(k in val for k in ["Total", "Settlement"]):
-                cell.font = bold
-
-            # TABLE CELLS
-            if c_idx > 1:
-                cell.border = border
-
-    # AUTO WIDTH
-    for col in ws.columns:
-        max_len = 0
-        col_letter = col[0].column_letter
-
-        for cell in col:
-            if cell.value:
-                max_len = max(max_len, len(str(cell.value)))
-
-        ws.column_dimensions[col_letter].width = max_len + 2
+        for r in rows:
+            total = r[2] + r[3] + r[4] + r[5]
+            ws.append([r[0], r[1], r[2], r[3], r[4], r[5], total])
 
     wb.save(filename)
 
 
-# 🚀 BOT
+# 🚀 START
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    await message.reply("PDF yubor — men uni PROFESSIONAL Excel qilaman 📊🔥")
+    await message.answer(
+        "📂 VISA settlement PDF yubor\n"
+        "Men Excel qilib beraman ✅"
+    )
 
 
+# 📥 PDF HANDLE
 @dp.message(F.document)
-async def handle_file(message: types.Message):
+async def handle_pdf(message: types.Message):
     if not message.document.file_name.endswith(".pdf"):
-        await message.reply("❌ PDF yubor")
+        await message.answer("❌ Faqat PDF yubor")
         return
 
     os.makedirs("downloads", exist_ok=True)
@@ -196,31 +126,25 @@ async def handle_file(message: types.Message):
 
     await bot.download_file(file.file_path, path)
 
-    await message.reply("⏳ Processing...")
-
     text = extract_text_from_pdf(path)
-    rows = parse_rows(text)
+    data = parse_settlement_report(text)
 
-    save_excel(rows)
+    if not data:
+        await message.answer("❌ Bu VISA report emas")
+        return
 
-    await message.reply_document(FSInputFile("output.xlsx"))
-    try:
-        os.remove(path)
-    except:
-        pass
+    save_to_excel(data)
 
-        # 🔥 Excelni ham o‘chirish
-    try:
-        os.remove("output.xlsx")
-    except:
-        pass
+    await message.answer_document(FSInputFile("report.xlsx"))
 
 
+# ❌ BOSHQA NARSA
 @dp.message()
 async def other(message: types.Message):
-    await message.reply("❌ Faqat PDF yubor")
+    await message.answer("❌ Faqat PDF yubor")
 
 
+# ▶️ RUN
 async def main():
     await dp.start_polling(bot)
 
